@@ -1,0 +1,21 @@
+Copyright (c) 2026 YT Global LLC. All rights reserved.
+
+This repository contains the source code of the "Org Chart by YT Global" Power BI visual.
+The source is published for transparency and for review by Microsoft as part of
+Power BI visual certification.
+
+You may view and build this source code to evaluate or verify the visual. You may not
+copy, modify, redistribute, sublicense or sell this code or derivative works, or publish
+a visual built from it, without prior written permission from YT Global LLC.
+
+The published visual is licensed to end users under the terms shown on its Microsoft
+AppSource listing.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+IN NO EVENT SHALL YT GLOBAL LLC BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE.
+
+Third-party components (d3, powerbi-visuals-api, powerbi-visuals-utils-*) are used
+under their own open-source licenses.
+
+Contact: info@ytgllc.com

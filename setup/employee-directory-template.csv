@@ -1,0 +1,6 @@
+EmployeeID,ManagerID,FullName,JobTitle,Department,Email,Phone,Location,PhotoUrl
+100,,Amara Okafor,Chief Executive Officer,Executive,amara.okafor@contoso.com,,Washington DC,
+110,100,Daniel Reyes,Chief Technology Officer,Technology,daniel.reyes@contoso.com,,Washington DC,
+120,100,Priya Raman,Chief Financial Officer,Finance,priya.raman@contoso.com,,New York,
+130,100,Marcus Bell,Chief Operating Officer,Operations,marcus.bell@contoso.com,,Baltimore,
+140,100,Elena Fischer,VP People,People,elena.fischer@contoso.com,,Remote,

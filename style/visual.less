@@ -1,0 +1,124 @@
+@font: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+
+.orgchart-root {
+    font-family: @font;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+
+    .orgchart-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px;
+        border-bottom: 1px solid #E6E8EB;
+        background: #FAFBFC;
+        position: relative;
+        z-index: 2;
+
+        button {
+            font: 12px @font;
+            padding: 4px 10px;
+            border: 1px solid #D0D5DB;
+            border-radius: 6px;
+            background: #FFFFFF;
+            color: #1F2328;
+            cursor: pointer;
+            &:hover { background: #F1F3F5; }
+            &:focus-visible { outline: 2px solid #2563EB; outline-offset: 1px; }
+        }
+
+        .warn-badge {
+            margin-left: auto;
+            font-size: 11px;
+            color: #9A6700;
+            background: #FFF8C5;
+            border: 1px solid #E8D48A;
+            border-radius: 10px;
+            padding: 2px 8px;
+            cursor: help;
+        }
+    }
+
+    .search-wrap {
+        position: relative;
+        flex: 0 1 240px;
+        min-width: 120px;
+
+        input {
+            width: 100%;
+            box-sizing: border-box;
+            font: 12px @font;
+            padding: 5px 10px;
+            border: 1px solid #D0D5DB;
+            border-radius: 6px;
+            outline: none;
+            &:focus { border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15); }
+        }
+
+        .search-results {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            max-height: 260px;
+            overflow-y: auto;
+            background: #FFFFFF;
+            border: 1px solid #D0D5DB;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+            button {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                width: 100%;
+                border: none;
+                border-radius: 0;
+                text-align: left;
+                padding: 6px 10px;
+                strong { font-weight: 600; font-size: 12px; }
+                span { font-size: 11px; color: #5B6470; }
+            }
+            .no-hit { padding: 8px 10px; font-size: 12px; color: #5B6470; }
+        }
+    }
+
+    .orgchart-landing {
+        padding: 24px;
+        color: #5B6470;
+        h3 { margin: 0 0 8px; color: #1F2328; font-weight: 600; }
+        p { margin: 0; font-size: 13px; line-height: 1.5; max-width: 460px; }
+    }
+
+    .orgchart-svg {
+        display: block;
+        cursor: grab;
+        &:active { cursor: grabbing; }
+    }
+
+    g.node {
+        cursor: pointer;
+        outline: none;
+        transition: opacity 0.15s ease;
+
+        rect.card {
+            stroke: #E1E4E8;
+            stroke-width: 1;
+            filter: drop-shadow(0 1px 2px rgba(16, 24, 40, 0.08)) drop-shadow(0 2px 6px rgba(16, 24, 40, 0.06));
+        }
+        &:hover rect.card { stroke: #9AA4B2; }
+        &:focus-visible rect.card { stroke: #2563EB; stroke-width: 2; }
+        &.highlight rect.card { stroke: #F59E0B; stroke-width: 2.5; }
+        &.dimmed { opacity: 0.35; }
+
+        text { dominant-baseline: auto; pointer-events: none; }
+        .avatar-initials { font-weight: 600; letter-spacing: 0.02em; }
+
+        g.toggle {
+            cursor: pointer;
+            text { pointer-events: none; }
+            &:hover rect { filter: brightness(0.95); }
+        }
+    }
+}

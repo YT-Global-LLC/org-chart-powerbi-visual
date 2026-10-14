@@ -1,0 +1,28 @@
+EmployeeID,ManagerID,FullName,JobTitle,Department,Email,Location
+100,,Amara Okafor,Chief Executive Officer,Executive,amara.okafor@contoso.com,Washington DC
+110,100,Daniel Reyes,Chief Technology Officer,Technology,daniel.reyes@contoso.com,Washington DC
+120,100,Priya Raman,Chief Financial Officer,Finance,priya.raman@contoso.com,New York
+130,100,Marcus Bell,Chief Operating Officer,Operations,marcus.bell@contoso.com,Baltimore
+140,100,Elena Fischer,VP People,People,elena.fischer@contoso.com,Remote
+111,110,Hana Sato,Director of Engineering,Technology,hana.sato@contoso.com,Washington DC
+112,110,Omar Haddad,Director of Data,Technology,omar.haddad@contoso.com,Remote
+113,110,Grace Lee,Head of Design,Technology,grace.lee@contoso.com,New York
+1111,111,Lucas Moreau,Engineering Manager,Technology,lucas.moreau@contoso.com,Washington DC
+1112,111,Zoe Adams,Engineering Manager,Technology,zoe.adams@contoso.com,Remote
+11111,1111,Ivan Petrov,Senior Developer,Technology,ivan.petrov@contoso.com,Washington DC
+11112,1111,Mei Chen,Developer,Technology,mei.chen@contoso.com,Washington DC
+11121,1112,Samuel Osei,Developer,Technology,samuel.osei@contoso.com,Remote
+1121,112,Fatima Noor,Data Engineer,Technology,fatima.noor@contoso.com,Remote
+1122,112,Leo Martins,BI Analyst,Technology,leo.martins@contoso.com,New York
+1131,113,Ava Thompson,Product Designer,Technology,ava.thompson@contoso.com,New York
+121,120,Noah Kim,Controller,Finance,noah.kim@contoso.com,New York
+122,120,Isabel Cruz,FP&A Manager,Finance,isabel.cruz@contoso.com,New York
+1211,121,Ethan Wright,Accountant,Finance,ethan.wright@contoso.com,New York
+1221,122,Lina Haddad,Financial Analyst,Finance,lina.haddad@contoso.com,Remote
+131,130,Kofi Mensah,Program Director,Operations,kofi.mensah@contoso.com,Baltimore
+132,130,Sofia Rossi,Procurement Lead,Operations,sofia.rossi@contoso.com,Baltimore
+1311,131,Jack Turner,Program Manager,Operations,jack.turner@contoso.com,Baltimore
+1312,131,Nadia Ali,Program Manager,Operations,nadia.ali@contoso.com,Remote
+141,140,Ruth Abebe,HR Business Partner,People,ruth.abebe@contoso.com,Remote
+142,140,Chris Evans,Talent Acquisition Lead,People,chris.evans@contoso.com,Washington DC
+1421,142,Maya Patel,Recruiter,People,maya.patel@contoso.com,Washington DC
