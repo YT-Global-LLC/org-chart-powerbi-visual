@@ -70,4 +70,4 @@ to cross-filter.
 ## License
 
 Copyright © 2026 YT Global LLC. All rights reserved; see [LICENSE](LICENSE).
-Support: info@ytgllc.com
+Support: appsupport@ytgllc.com
