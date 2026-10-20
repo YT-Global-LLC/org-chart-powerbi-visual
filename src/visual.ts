@@ -24,6 +24,15 @@ import { buildOrg, cleanKey, initials, OrgNode, PersonRow, BuildResult } from ".
 type PNode = HierarchyPointNode<OrgNode>;
 
 const ROOT_KEY = "__synthetic_root__";
+/** Direct reports shown per manager before a "+N more" card. */
+const PAGE_SIZE = 50;
+/** Upper bound on cards drawn by "Expand all", so very large orgs stay responsive. */
+const RENDER_BUDGET = 1500;
+/** When a search result sits deeper than this, show only the branch around it instead of every level above. */
+const MAX_REVEAL_DEPTH = 40;
+const FOCUS_LEVELS_ABOVE = 8;
+/** Never zoom out further than this when fitting; below it cards become unreadable. */
+const MIN_FIT_SCALE = 0.3;
 
 export class Visual implements IVisual {
     private host: IVisualHost;
@@ -39,6 +48,7 @@ export class Visual implements IVisual {
     private searchInput: HTMLInputElement;
     private searchResults: HTMLDivElement;
     private warnBadge: HTMLSpanElement;
+    private infoNote: HTMLSpanElement;
     private landing: HTMLDivElement;
     private svg: Selection<SVGSVGElement, unknown, null, undefined>;
     private viewport: Selection<SVGGElement, unknown, null, undefined>;
@@ -50,6 +60,15 @@ export class Visual implements IVisual {
     private model: BuildResult | null = null;
     private selectionIds = new Map<number, ISelectionId>();
     private expanded = new Set<string>();
+    /** Per-manager count of direct reports currently shown (default PAGE_SIZE). */
+    private shown = new Map<string, number>();
+    /** Reports revealed by search that sit beyond their manager's shown page. */
+    private pinned = new Map<string, Set<OrgNode>>();
+    private budgetHit = false;
+    /** When set, the chart is drawn from this person down (used for very deep search results). */
+    private focusRoot: OrgNode | null = null;
+    private measureCtx: CanvasRenderingContext2D | null = null;
+    private fontFamily = "Segoe UI, sans-serif";
     private dataSignature = "";
     private lastInitialDepth = -1;
     private highlightKey: string | null = null;
@@ -57,6 +76,8 @@ export class Visual implements IVisual {
     private height = 0;
     private didInitialFit = false;
     private bounds: { x: number; y: number; width: number; height: number } | null = null;
+    /** Position of the top card, used to anchor the view when the whole chart can't fit legibly. */
+    private topPos: { x: number; y: number } | null = null;
 
     constructor(options: VisualConstructorOptions) {
         this.host = options.host;
@@ -145,6 +166,11 @@ export class Visual implements IVisual {
         mkBtn("Collapse", "Reset to the default levels", () => { this.resetExpansion(); this.render(true); });
         mkBtn("Fit", "Fit the chart to the visual", () => this.fit(true));
 
+        this.infoNote = document.createElement("span");
+        this.infoNote.className = "info-note";
+        this.infoNote.hidden = true;
+        tb.appendChild(this.infoNote);
+
         this.warnBadge = document.createElement("span");
         this.warnBadge.className = "warn-badge";
         this.warnBadge.hidden = true;
@@ -160,13 +186,13 @@ export class Visual implements IVisual {
         if (!q || !this.model) { this.searchResults.hidden = true; return; }
 
         const hits: OrgNode[] = [];
-        const walk = (n: OrgNode) => {
-            if (hits.length >= 12) return;
+        const stack: OrgNode[] = [this.model.root];
+        while (stack.length && hits.length < 12) {
+            const n = stack.pop()!;
             const p = n.person;
             if (p && (p.name.toLowerCase().includes(q) || p.title.toLowerCase().includes(q) || p.department.toLowerCase().includes(q))) hits.push(n);
-            n.children.forEach(walk);
-        };
-        walk(this.model.root);
+            for (let i = n.children.length - 1; i >= 0; i--) stack.push(n.children[i]);
+        }
 
         if (!hits.length) {
             const empty = document.createElement("div");
@@ -247,10 +273,10 @@ export class Visual implements IVisual {
             this.didInitialFit = false;
         }
 
-        const w = this.model.warnings;
-        this.warnBadge.hidden = w.length === 0;
-        this.warnBadge.textContent = `⚠ ${w.length}`;
-        this.warnBadge.title = w.slice(0, 25).join("\n") + (w.length > 25 ? `\n…and ${w.length - 25} more` : "");
+        const w = this.model.warnings, wn = this.model.warningCount;
+        this.warnBadge.hidden = wn === 0;
+        this.warnBadge.textContent = `⚠ ${wn.toLocaleString()}`;
+        this.warnBadge.title = w.slice(0, 25).join("\n") + (wn > 25 ? `\n…and ${(wn - 25).toLocaleString()} more` : "");
 
         this.render(false);
         if (!this.didInitialFit) {
@@ -323,29 +349,91 @@ export class Visual implements IVisual {
     // ---------------------------------------------------------------- expansion
 
     private keyOf(n: OrgNode): string {
+        if (n.moreOf) return "__more__" + this.keyOf(n.moreOf);
         return n.person ? (cleanKey(n.person.id) as string) : ROOT_KEY;
     }
 
     private resetExpansion(): void {
         this.expanded.clear();
+        this.shown.clear();
+        this.pinned.clear();
+        this.focusRoot = null;
+        this.setBudgetNote(false);
         if (!this.model) return;
         const depth = this.formattingSettings.layoutCard.initialDepth.value;
         const offset = this.model.syntheticRoot ? 1 : 0;
-        const walk = (n: OrgNode) => {
+        const stack: OrgNode[] = [this.model.root];
+        while (stack.length) {
+            const n = stack.pop()!;
             if (n.depth - offset < depth - 1 || !n.person) {
                 this.expanded.add(this.keyOf(n));
-                n.children.forEach(walk);
+                // only descend into reports that will actually be visible on the first page
+                const limit = Math.min(n.children.length, PAGE_SIZE);
+                for (let i = 0; i < limit; i++) stack.push(n.children[i]);
             }
-        };
-        walk(this.model.root);
+        }
+    }
+
+    /** The reports drawn under a manager: the first page, any pinned search results, then a "+N more" card. */
+    private visibleChildren(n: OrgNode): OrgNode[] | null {
+        if (n.moreOf || !n.children.length) return null;
+        const k = this.keyOf(n);
+        if (!this.expanded.has(k)) return null;
+        const limit = this.shown.get(k) ?? PAGE_SIZE;
+        const kids = n.children;
+        if (kids.length <= limit) return kids;
+        const list = kids.slice(0, limit);
+        const pins = this.pinned.get(k);
+        if (pins) pins.forEach(pn => { if (kids.indexOf(pn) >= limit) list.push(pn); });
+        const remaining = kids.length - list.length;
+        if (remaining > 0) {
+            list.push({ person: null, children: [], totalReports: 0, depth: n.depth + 1, parent: n, more: remaining, moreOf: n });
+        }
+        return list;
+    }
+
+    private showMore(parent: OrgNode): void {
+        const k = this.keyOf(parent);
+        this.shown.set(k, (this.shown.get(k) ?? PAGE_SIZE) + PAGE_SIZE);
+        this.render(true, "__more__" + k);
     }
 
     private expandAll(): void {
         if (!this.model) return;
-        const walk = (n: OrgNode) => { this.expanded.add(this.keyOf(n)); n.children.forEach(walk); };
-        walk(this.model.root);
+        // Breadth-first so the top of the org opens first; stop at the render budget.
+        let visible = 0;
+        let hit = false;
+        const queue: OrgNode[] = [this.model.root];
+        for (let qi = 0; qi < queue.length; qi++) {
+            const n = queue[qi];
+            if (!n.children.length) continue;
+            const k = this.keyOf(n);
+            const limit = this.shown.get(k) ?? PAGE_SIZE;
+            const page = Math.min(n.children.length, limit);
+            if (visible + page > RENDER_BUDGET && visible > 0) { hit = true; break; }
+            this.expanded.add(k);
+            visible += page + (n.children.length > limit ? 1 : 0);
+            if (n.children.length > limit) hit = true;
+            for (let i = 0; i < page; i++) queue.push(n.children[i]);
+        }
+        this.setBudgetNote(hit);
         this.render(true);
         this.fit(true);
+    }
+
+    private setFocusNote(top: OrgNode, depth: number): void {
+        if (!this.infoNote) return;
+        this.infoNote.hidden = false;
+        this.infoNote.textContent = `Showing the branch from ${top.person?.name || "this manager"} down (${depth.toLocaleString()} levels deep). Click Collapse to return to the top.`;
+    }
+
+    private setBudgetNote(on: boolean): void {
+        this.budgetHit = on;
+        if (!this.infoNote) return;
+        this.infoNote.hidden = !on;
+        if (on && this.model) {
+            this.infoNote.textContent = `Large org (${this.model.count.toLocaleString()} people): showing part of the chart. Use search or "+ more" cards to see everyone.`;
+        }
     }
 
     private toggle(n: OrgNode): void {
@@ -357,17 +445,32 @@ export class Visual implements IVisual {
 
     private revealPerson(target: OrgNode): void {
         if (!this.model) return;
-        // find path root -> target
-        const path: OrgNode[] = [];
-        const find = (n: OrgNode): boolean => {
-            path.push(n);
-            if (n === target) return true;
-            for (const c of n.children) if (find(c)) return true;
-            path.pop();
-            return false;
-        };
-        find(this.model.root);
-        path.slice(0, -1).forEach(n => this.expanded.add(this.keyOf(n)));
+        // Very deep match: draw only the branch around the person (a few levels above it).
+        let depth = 0;
+        for (let a = target.parent ?? null; a; a = a.parent ?? null) depth++;
+        this.focusRoot = null;
+        let stopAt: OrgNode | null = null;
+        if (depth > MAX_REVEAL_DEPTH) {
+            let a: OrgNode = target;
+            for (let i = 0; i < FOCUS_LEVELS_ABOVE && a.parent && a.parent.person; i++) a = a.parent;
+            this.focusRoot = a;
+            stopAt = a.parent ?? null;
+            this.setFocusNote(a, depth);
+        }
+        // Walk up the parent links (no recursion, safe for very deep orgs).
+        let child: OrgNode = target;
+        let p = target.parent ?? null;
+        while (p && p !== stopAt) {
+            const pk = this.keyOf(p);
+            this.expanded.add(pk);
+            const limit = this.shown.get(pk) ?? PAGE_SIZE;
+            if (p.children.indexOf(child) >= limit) {
+                if (!this.pinned.has(pk)) this.pinned.set(pk, new Set());
+                this.pinned.get(pk)!.add(child);
+            }
+            child = p;
+            p = p.parent ?? null;
+        }
         this.highlightKey = this.keyOf(target);
         this.render(true);
         this.centerOn(this.highlightKey);
@@ -392,7 +495,8 @@ export class Visual implements IVisual {
 
     private layoutTree(): PNode | null {
         if (!this.model) return null;
-        const h = hierarchy<OrgNode>(this.model.root, n => (this.expanded.has(this.keyOf(n)) ? n.children : null));
+        const start = this.focusRoot ?? this.model.root;
+        const h = hierarchy<OrgNode>(start, n => this.visibleChildren(n));
         const { w, h: ch } = this.dims();
         const L = this.formattingSettings.layoutCard;
         const vertical = (L.orientation.value as any).value !== "horizontal";
@@ -402,7 +506,7 @@ export class Visual implements IVisual {
         const laid = tree<OrgNode>().nodeSize(nodeSize).separation((a, b) => (a.parent === b.parent ? 1 : 1.15))(h);
         if (!vertical) laid.each(d => { const t = d.x; d.x = d.y; d.y = t; });
         // If synthetic root is hidden, pull everything up one level.
-        if (this.model.syntheticRoot) {
+        if (this.model.syntheticRoot && !this.focusRoot) {
             const shift = nodeSize[1];
             laid.each(d => { if (vertical) d.y -= shift; else d.x -= shift; });
         }
@@ -434,15 +538,26 @@ export class Visual implements IVisual {
             if (!prev.empty()) { const d = prev.datum(); anchorBefore = { x: (d as any)._x ?? d.x, y: (d as any)._y ?? d.y }; }
         }
 
-        const nodes = laid.descendants().filter(d => d.data.person);
+        const all = laid.descendants();
+        const nodes = all.filter(d => d.data.person);
+        const moreNodes = all.filter(d => d.data.moreOf);
         if (nodes.length) {
             const pad = fs * 1.2; // room for the toggle chip
-            const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
-            const x0 = Math.min(...xs) - w / 2, x1 = Math.max(...xs) + w / 2 + (vertical ? 0 : pad);
-            const y0 = Math.min(...ys) - h / 2, y1 = Math.max(...ys) + h / 2 + (vertical ? pad : 0);
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const n of all) {
+                if (!n.data.person && !n.data.moreOf) continue;
+                if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+                if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+            }
+            const x0 = minX - w / 2, x1 = maxX + w / 2 + (vertical ? 0 : pad);
+            const y0 = minY - h / 2, y1 = maxY + h / 2 + (vertical ? pad : 0);
             this.bounds = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+            let top = nodes[0];
+            for (const n of nodes) if (n.depth < top.depth) top = n;
+            this.topPos = { x: top.x, y: top.y };
         } else {
             this.bounds = null;
+            this.topPos = null;
         }
         const links = laid.links().filter(l => l.source.data.person);
 
@@ -554,9 +669,9 @@ export class Visual implements IVisual {
             g.select("text.name").attr("font-size", fs * 1.08).attr("font-weight", 600).attr("fill", nameColor);
             g.select("text.title").attr("font-size", fs * 0.92).attr("fill", subColor);
             g.select("text.dept").attr("font-size", fs * 0.8).attr("fill", color).attr("font-weight", 600);
-            self.fitText(g.select<SVGTextElement>("text.name"), p.name, textX, lines[0] * fs * 1.25, textMax);
-            self.fitText(g.select<SVGTextElement>("text.title"), p.title, textX, lines[1] * fs * 1.25, textMax);
-            self.fitText(g.select<SVGTextElement>("text.dept"), showDept ? p.department : "", textX, (lines[2] ?? 0) * fs * 1.25, textMax);
+            self.fitText(g.select<SVGTextElement>("text.name"), p.name, textX, lines[0] * fs * 1.25, textMax, fs * 1.08, 600);
+            self.fitText(g.select<SVGTextElement>("text.title"), p.title, textX, lines[1] * fs * 1.25, textMax, fs * 0.92, 400);
+            self.fitText(g.select<SVGTextElement>("text.dept"), showDept ? p.department : "", textX, (lines[2] ?? 0) * fs * 1.25, textMax, fs * 0.8, 600);
 
             // toggle / report-count chip
             const hasKids = d.data.children.length > 0;
@@ -601,6 +716,42 @@ export class Visual implements IVisual {
             .on("mouseout", () => this.host.tooltipService.hide({ immediately: true, isTouchEvent: false }));
 
         nodeSel.transition().duration(dur)
+            .attr("opacity", 1)
+            .attr("transform", d => `translate(${d.x},${d.y})`);
+
+        // ---- "+N more" cards
+        const moreSel = this.nodeLayer.selectAll<SVGGElement, PNode>("g.more")
+            .data(moreNodes, d => this.keyOf(d.data))
+            .join(
+                enter => {
+                    const g = enter.append("g").attr("class", "more").attr("tabindex", 0).attr("role", "button")
+                        .attr("opacity", 0)
+                        .attr("transform", d => `translate(${d.x},${d.y})`);
+                    g.append("rect").attr("class", "more-card");
+                    g.append("text").attr("class", "more-count");
+                    g.append("text").attr("class", "more-hint");
+                    return g;
+                },
+                update => update,
+                exit => exit.remove()
+            );
+        moreSel.attr("aria-label", d => `Show ${Math.min(PAGE_SIZE, d.data.more!)} more of ${d.data.more!.toLocaleString()} hidden direct reports`);
+        moreSel.select("rect.more-card")
+            .attr("x", -w / 2).attr("y", -h / 2).attr("width", w).attr("height", h)
+            .attr("rx", radius).attr("ry", radius)
+            .attr("fill", cardBg).attr("stroke", hc.on ? hc.fg : "#9AA4B2").attr("stroke-dasharray", "5 4");
+        moreSel.select("text.more-count").attr("x", 0).attr("y", -fs * 0.35).attr("dy", "0.35em").attr("text-anchor", "middle")
+            .attr("font-size", fs * 1.15).attr("font-weight", 700).attr("fill", nameColor)
+            .text(d => `+ ${d.data.more!.toLocaleString()} more`);
+        moreSel.select("text.more-hint").attr("x", 0).attr("y", fs * 0.95).attr("dy", "0.35em").attr("text-anchor", "middle")
+            .attr("font-size", fs * 0.85).attr("fill", subColor)
+            .text(d => `Click to show the next ${Math.min(PAGE_SIZE, d.data.more!)}`);
+        moreSel
+            .on("click", (event: MouseEvent, d) => { event.stopPropagation(); this.showMore(d.data.moreOf!); })
+            .on("keydown", (event: KeyboardEvent, d) => {
+                if (event.key === "Enter" || event.key === " ") { this.showMore(d.data.moreOf!); event.preventDefault(); }
+            });
+        moreSel.transition().duration(dur)
             .attr("opacity", 1)
             .attr("transform", d => `translate(${d.x},${d.y})`);
 
@@ -661,13 +812,22 @@ export class Visual implements IVisual {
         if (!box.width || !box.height || !vw || !vh) return;
 
         const pad = 20;
-        const scale = Math.min(1.1, (vw - pad * 2) / box.width, (vh - pad * 2) / box.height);
+        const fitScale = Math.min(1.1, (vw - pad * 2) / box.width, (vh - pad * 2) / box.height);
+        const scale = Math.max(fitScale, MIN_FIT_SCALE);
         const vertical = (this.formattingSettings.layoutCard.orientation.value as any).value !== "horizontal";
-        const tx = vertical || box.width * scale > vw - pad * 2
-            ? vw / 2 - scale * (box.x + box.width / 2)
-            : pad - scale * box.x;
-        // top-aligned for top-down charts, vertically centred for left-to-right
-        const ty = vertical ? pad - scale * box.y : vh / 2 - scale * (box.y + box.height / 2);
+        let tx: number, ty: number;
+        if (fitScale < MIN_FIT_SCALE && this.topPos) {
+            // Too big to show legibly: keep a readable zoom and start at the top of the org.
+            const { w, h } = this.dims();
+            if (vertical) { tx = vw / 2 - scale * this.topPos.x; ty = pad - scale * (this.topPos.y - h / 2); }
+            else { tx = pad - scale * (this.topPos.x - w / 2); ty = vh / 2 - scale * this.topPos.y; }
+        } else {
+            tx = vertical || box.width * scale > vw - pad * 2
+                ? vw / 2 - scale * (box.x + box.width / 2)
+                : pad - scale * box.x;
+            // top-aligned for top-down charts, vertically centred for left-to-right
+            ty = vertical ? pad - scale * box.y : vh / 2 - scale * (box.y + box.height / 2);
+        }
         const t = zoomIdentity.translate(tx, ty).scale(scale);
         const target = animate ? this.svg.transition().duration(350) : this.svg;
         (target as any).call(this.zoomBehavior.transform, t);
@@ -685,20 +845,25 @@ export class Visual implements IVisual {
         (g.node() as SVGGElement).focus();
     }
 
-    private fitText(sel: Selection<SVGTextElement, unknown, null, undefined>, text: string, x: number, y: number, max: number) {
-        sel.attr("x", x).attr("y", y).attr("dy", "0.35em").text(text || "");
-        const el = sel.node();
-        if (!el || !text) return sel;
-        try {
-            if (el.getComputedTextLength() <= max) return sel;
-            let lo = 0, hi = text.length;
-            while (lo < hi) {
-                const mid = Math.ceil((lo + hi) / 2);
-                el.textContent = text.slice(0, mid) + "…";
-                if (el.getComputedTextLength() <= max) lo = mid; else hi = mid - 1;
-            }
-            el.textContent = text.slice(0, lo).trimEnd() + "…";
-        } catch { /* not rendered yet (hidden visual) – leave full text */ }
+    /** Truncate with an ellipsis using canvas text metrics (no layout reflow, fast for thousands of cards). */
+    private fitText(sel: Selection<SVGTextElement, unknown, null, undefined>, text: string, x: number, y: number, max: number,
+                    size: number, weight: number) {
+        sel.attr("x", x).attr("y", y).attr("dy", "0.35em");
+        const t = text || "";
+        if (!this.measureCtx) {
+            this.measureCtx = document.createElement("canvas").getContext("2d");
+            try { this.fontFamily = getComputedStyle(this.container).fontFamily || this.fontFamily; } catch { /* keep default */ }
+        }
+        const ctx = this.measureCtx;
+        if (!ctx || !t) { sel.text(t); return sel; }
+        ctx.font = `${weight} ${size}px ${this.fontFamily}`;
+        if (ctx.measureText(t).width <= max) { sel.text(t); return sel; }
+        let lo = 0, hi = t.length;
+        while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            if (ctx.measureText(t.slice(0, mid) + "…").width <= max) lo = mid; else hi = mid - 1;
+        }
+        sel.text(t.slice(0, lo).trimEnd() + "…");
         return sel;
     }
 

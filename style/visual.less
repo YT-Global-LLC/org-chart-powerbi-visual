@@ -122,3 +122,23 @@
         }
     }
 }
+
+.orgchart-root {
+    .orgchart-toolbar .info-note {
+        font-size: 11px;
+        color: #5B6470;
+        margin-left: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+    g.more {
+        cursor: pointer;
+        outline: none;
+        text { pointer-events: none; }
+        &:hover rect.more-card { stroke: #2563EB; }
+        &:focus-visible rect.more-card { stroke: #2563EB; stroke-width: 2; }
+    }
+}

@@ -18,16 +18,21 @@ export interface PersonRow {
 }
 
 export interface OrgNode {
-    person: PersonRow | null;     // null only for the synthetic root above several top-level people
+    person: PersonRow | null;     // null for the synthetic root and for "+N more" placeholders
     children: OrgNode[];
     totalReports: number;         // all descendants
     depth: number;
+    parent?: OrgNode | null;
+    /** Only on "+N more" placeholder nodes: number of hidden siblings, and whose children they are. */
+    more?: number;
+    moreOf?: OrgNode;
 }
 
 export interface BuildResult {
     root: OrgNode;
     syntheticRoot: boolean;
     warnings: string[];
+    warningCount: number;
     count: number;
 }
 
@@ -41,15 +46,19 @@ export function cleanKey(v: unknown): string | null {
     return s.toLowerCase();
 }
 
+const MAX_WARNINGS = 200;
+
 export function buildOrg(rows: PersonRow[]): BuildResult {
     const warnings: string[] = [];
+    let warningCount = 0;
+    const warn = (msg: string) => { warningCount++; if (warnings.length < MAX_WARNINGS) warnings.push(msg); };
     const byId = new Map<string, PersonRow>();
 
     for (const r of rows) {
         const key = cleanKey(r.id);
         if (!key) continue;
         if (byId.has(key)) {
-            warnings.push(`Duplicate Employee ID "${r.id}" – kept the first row.`);
+            warn(`Duplicate Employee ID "${r.id}" – kept the first row.`);
             continue;
         }
         byId.set(key, r);
@@ -62,7 +71,7 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
         if (mgr === key) {
             mgr = null;
         } else if (mgr && !byId.has(mgr)) {
-            warnings.push(`Manager "${r.managerId}" for ${r.name || r.id} not found – shown at top level.`);
+            warn(`Manager "${r.managerId}" for ${r.name || r.id} not found – shown at top level.`);
             mgr = null;
         }
         parentOf.set(key, mgr);
@@ -80,7 +89,7 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
         while (cur && !safe.has(cur)) {
             if (onPath.has(cur)) {
                 const p = byId.get(prev);
-                warnings.push(`Reporting loop detected at ${p?.name || prev} – moved to top level.`);
+                warn(`Reporting loop detected at ${p?.name || prev} – moved to top level.`);
                 parentOf.set(prev, null);
                 break;
             }
@@ -98,7 +107,7 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
     const tops: OrgNode[] = [];
     for (const [key, node] of nodes) {
         const p = parentOf.get(key);
-        if (p) nodes.get(p)!.children.push(node);
+        if (p) { const pn = nodes.get(p)!; pn.children.push(node); node.parent = pn; }
         else tops.push(node);
     }
 
@@ -110,8 +119,10 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
     let syntheticRoot = false;
     if (tops.length === 1) {
         root = tops[0];
+        root.parent = null;
     } else {
-        root = { person: null, children: tops, totalReports: 0, depth: 0 };
+        root = { person: null, children: tops, totalReports: 0, depth: 0, parent: null };
+        tops.forEach(t => (t.parent = root));
         syntheticRoot = true;
     }
 
@@ -129,7 +140,7 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
         }
     }
 
-    return { root, syntheticRoot, warnings, count: byId.size };
+    return { root, syntheticRoot, warnings, warningCount, count: byId.size };
 }
 
 export function initials(name: string): string {

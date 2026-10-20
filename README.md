@@ -11,6 +11,8 @@ An interactive, multilevel organization chart for Microsoft Power BI, built from
 - Top-to-bottom or left-to-right layout; card, color and spacing options in the Format pane
 - Flags data problems (missing managers, duplicate IDs, reporting loops) instead of breaking
 - Keyboard navigation and high-contrast support; up to 30,000 rows
+- Stays responsive with very large or flat orgs: direct reports load in pages of 50 ("+ N more" cards),
+  Expand all stops at ~1,500 cards, and search reveals anyone without drawing the whole org
 
 **Setup guide for customers:** https://ytgllc.com/org-chart-support.html
 
@@ -36,7 +38,7 @@ pbiviz package --certification-audit # writes dist/*.pbiviz
 | | |
 |---|---|
 | Visual GUID | `spOrgChartYTG7C41E0B2A9D84F3C9F12` |
-| Version | 1.1.0.0 |
+| Version | 1.1.1.0 |
 | API version | 5.11.1 |
 
 ## Repository layout
@@ -56,6 +58,14 @@ No accounts, license keys or credentials are needed; the visual is free with no 
 Load `setup/sample-org.csv` with **Enter data**, bind Employee ID and Manager ID (plus Name, Job Title and
 Department), then try the search box, expand/collapse chips, Expand all / Collapse / Fit, and click a card
 to cross-filter.
+
+## Changelog
+
+- **1.1.1.0**: Large-data performance. Paged direct reports with "+ N more" cards, render budget for
+  Expand all, canvas-based text truncation (no layout reflow), iterative traversal (safe for very deep
+  orgs), branch focus for very deep search results, minimum readable zoom on Fit, capped warning list.
+  Tested with 30,000 rows as flat, single-manager, unmatched-manager, wide, balanced and 30,000-level chains.
+- **1.1.0.0**: First AppSource submission.
 
 ## License
 
