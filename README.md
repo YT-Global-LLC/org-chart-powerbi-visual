@@ -8,6 +8,8 @@ An interactive, multilevel organization chart for Microsoft Power BI, built from
 - Expand all, Collapse and Fit buttons; zoom and pan
 - Cards with embedded photo or initials, name, title and department, colored by department
 - Cross-filtering, multi-select, context menu, tooltips with model format strings
+- Auto layout picks the arrangement with the largest readable cards for the visual's size
+- Stacked team lists: people with no reports are listed in compact columns under their manager instead of one long row
 - Top-to-bottom or left-to-right layout; card, color and spacing options in the Format pane
 - Flags data problems (missing managers, duplicate IDs, reporting loops) instead of breaking
 - Keyboard navigation and high-contrast support; up to 30,000 rows
@@ -38,7 +40,7 @@ pbiviz package --certification-audit # writes dist/*.pbiviz
 | | |
 |---|---|
 | Visual GUID | `spOrgChartYTG7C41E0B2A9D84F3C9F12` |
-| Version | 1.1.1.0 |
+| Version | 1.2.0.0 |
 | API version | 5.11.1 |
 
 ## Repository layout
@@ -60,6 +62,10 @@ Department), then try the search box, expand/collapse chips, Expand all / Collap
 to cross-filter.
 
 ## Changelog
+
+- **1.2.0.0**: Layout options. New *Auto (best fit)* orientation (default) and *Team members (no reports)* setting:
+  stacked list, side by side or auto (default). Large teams wrap into columns of about 10. Auto re-evaluates when
+  the visual is resized. Names sort in natural order (Employee 2 before Employee 10).
 
 - **1.1.1.0**: Large-data performance. Paged direct reports with "+ N more" cards, render budget for
   Expand all, canvas-based text truncation (no layout reflow), iterative traversal (safe for very deep

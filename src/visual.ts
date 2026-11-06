@@ -3,7 +3,7 @@
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { select, Selection } from "d3-selection";
-import { hierarchy, tree, HierarchyPointNode } from "d3-hierarchy";
+import { hierarchy, tree } from "d3-hierarchy";
 import { zoom, zoomIdentity, ZoomBehavior } from "d3-zoom";
 import "d3-transition";
 import "./../style/visual.less";
@@ -21,7 +21,20 @@ import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
 import { VisualFormattingSettingsModel } from "./settings";
 import { buildOrg, cleanKey, initials, OrgNode, PersonRow, BuildResult } from "./orgModel";
 
-type PNode = HierarchyPointNode<OrgNode>;
+/** A card (or "+N more" card) placed on the canvas. */
+interface Placed {
+    data: OrgNode;
+    x: number;
+    y: number;
+    depth: number;
+    parent: Placed | null;
+    /** True for members of a stacked team list (drawn with a side spine instead of an elbow). */
+    stacked: boolean;
+}
+type PNode = Placed;
+
+interface LayoutChoice { vertical: boolean; stacked: boolean; }
+interface LayoutResult { placed: Placed[]; bounds: { x: number; y: number; width: number; height: number } | null; topPos: { x: number; y: number } | null; }
 
 const ROOT_KEY = "__synthetic_root__";
 /** Direct reports shown per manager before a "+N more" card. */
@@ -67,6 +80,10 @@ export class Visual implements IVisual {
     private budgetHit = false;
     /** When set, the chart is drawn from this person down (used for very deep search results). */
     private focusRoot: OrgNode | null = null;
+    /** Layout actually in use (resolved from the Auto settings). */
+    private layout: LayoutChoice = { vertical: true, stacked: true };
+    /** When true, the Auto settings are re-evaluated on the next render. */
+    private layoutDirty = true;
     private measureCtx: CanvasRenderingContext2D | null = null;
     private fontFamily = "Segoe UI, sans-serif";
     private dataSignature = "";
@@ -259,7 +276,12 @@ export class Visual implements IVisual {
             return;
         }
         this.showLanding(false);
-        if (onlyResize && this.model) return;
+        if (onlyResize && this.model) {
+            // With an Auto setting, a new visual size can mean a better arrangement.
+            if (this.isAuto()) { this.layoutDirty = true; this.render(false); this.fit(false); }
+            return;
+        }
+        this.layoutDirty = true;
 
         const rows = this.parseRows(dv);
         this.model = buildOrg(rows);
@@ -358,6 +380,7 @@ export class Visual implements IVisual {
         this.shown.clear();
         this.pinned.clear();
         this.focusRoot = null;
+        this.layoutDirty = true;
         this.setBudgetNote(false);
         if (!this.model) return;
         const depth = this.formattingSettings.layoutCard.initialDepth.value;
@@ -417,6 +440,7 @@ export class Visual implements IVisual {
             for (let i = 0; i < page; i++) queue.push(n.children[i]);
         }
         this.setBudgetNote(hit);
+        this.layoutDirty = true;
         this.render(true);
         this.fit(true);
     }
@@ -493,33 +517,134 @@ export class Visual implements IVisual {
         return c.accentColor.value.value;
     }
 
-    private layoutTree(): PNode | null {
-        if (!this.model) return null;
+    private orientationSetting(): string { return String((this.formattingSettings.layoutCard.orientation.value as any).value ?? "auto"); }
+    private teamSetting(): string { return String((this.formattingSettings.layoutCard.teamLayout.value as any).value ?? "auto"); }
+    private isAuto(): boolean { return this.orientationSetting() === "auto" || this.teamSetting() === "auto"; }
+
+    /** Pick the arrangement: fixed settings are used as-is; "Auto" tries each option and keeps the one with the largest readable fit. */
+    private resolveLayout(): LayoutChoice {
+        const o = this.orientationSetting(), t = this.teamSetting();
+        const verticals = o === "auto" ? [true, false] : [o !== "horizontal"];
+        const stackeds = t === "auto" ? [true, false] : [t !== "sideBySide"];
+        if (verticals.length * stackeds.length === 1) return { vertical: verticals[0], stacked: stackeds[0] };
+        const svgEl = this.svg.node() as SVGSVGElement;
+        const vw = +(svgEl?.getAttribute("width") || 0), vh = +(svgEl?.getAttribute("height") || 0);
+        let best: LayoutChoice | null = null, bestScore = -1;
+        for (const vertical of verticals) {
+            for (const stacked of stackeds) {
+                if (!vertical && stacked && stackeds.length > 1) continue; // same picture as side by side
+                const r = this.computeLayout({ vertical, stacked });
+                const b = r.bounds;
+                const score = !b || !vw || !vh ? 0 : Math.min(1.1, (vw - 40) / b.width, (vh - 40) / b.height);
+                // keep the earlier (preferred) option unless another is clearly better
+                if (score > bestScore * 1.02) { best = { vertical, stacked }; bestScore = score; }
+            }
+        }
+        return best ?? { vertical: true, stacked: true };
+    }
+
+    /** Lay out the visible chart for one arrangement. */
+    private computeLayout(choice: LayoutChoice): LayoutResult {
+        const empty: LayoutResult = { placed: [], bounds: null, topPos: null };
+        if (!this.model) return empty;
+        const { vertical, stacked } = choice;
         const start = this.focusRoot ?? this.model.root;
-        const h = hierarchy<OrgNode>(start, n => this.visibleChildren(n));
-        const { w, h: ch } = this.dims();
+        const { w, h: ch, fs } = this.dims();
         const L = this.formattingSettings.layoutCard;
-        const vertical = (L.orientation.value as any).value !== "horizontal";
+        const stackGap = Math.round(10 * fs / 12);
+
+        // Children for the tree layout. In stacked mode, a manager's team members who have no reports of their
+        // own are grouped into one placeholder that is later expanded into a stacked list.
+        // Long teams wrap into several side-by-side columns of about 10. The tall stack is reserved in the
+        // layout with invisible spacer nodes on the levels it covers, so deeper branches never overlap it.
+        const colStep = w + stackGap * 3;
+        const levelH = vertical ? ch + L.levelSpacing.value : 1;
+        const cols = new Map<OrgNode, number>();      // block or spacer -> number of columns
+        const spacerLeft = new Map<OrgNode, number>(); // block or spacer -> spacer levels still to add
+        const spacer = (owner: OrgNode, left: number, c: number): OrgNode[] | null => {
+            if (left <= 0) return null;
+            const sp: OrgNode = { person: null, children: [], totalReports: 0, depth: owner.depth + 1, parent: owner };
+            cols.set(sp, c); spacerLeft.set(sp, left - 1);
+            return [sp];
+        };
+        const kids = (n: OrgNode): OrgNode[] | null => {
+            if (cols.has(n)) return spacer(n, spacerLeft.get(n) ?? 0, cols.get(n)!);
+            const vis = this.visibleChildren(n);
+            if (!vis || !stacked || !vertical) return vis;
+            const leaves = vis.filter(c => c.moreOf || (c.person && c.children.length === 0));
+            if (leaves.length < 2) return vis;
+            const leafSet = new Set(leaves);
+            const others = vis.filter(c => !leafSet.has(c));
+            const block: OrgNode = { person: null, children: [], totalReports: 0, depth: n.depth + 1, parent: n, block: leaves };
+            const rows = leaves.length <= 12 ? leaves.length : Math.max(10, Math.ceil(Math.sqrt(leaves.length * 2)));
+            const c = Math.ceil(leaves.length / rows);
+            cols.set(block, c);
+            spacerLeft.set(block, Math.ceil((rows * (ch + stackGap)) / levelH) - 1);
+            return [block, ...others];
+        };
+
+        const root = hierarchy<OrgNode>(start, kids);
         const nodeSize: [number, number] = vertical
             ? [w + L.siblingSpacing.value, ch + L.levelSpacing.value]
             : [ch + L.siblingSpacing.value, w + L.levelSpacing.value];
-        const laid = tree<OrgNode>().nodeSize(nodeSize).separation((a, b) => (a.parent === b.parent ? 1 : 1.15))(h);
+        const laid = tree<OrgNode>().nodeSize(nodeSize).separation((a, b) => {
+            const extra = ((cols.get(a.data) ?? 1) - 1 + (cols.get(b.data) ?? 1) - 1) / 2 * colStep / nodeSize[0];
+            return (a.parent === b.parent ? 1 : 1.15) + extra;
+        })(root);
         if (!vertical) laid.each(d => { const t = d.x; d.x = d.y; d.y = t; });
-        // If synthetic root is hidden, pull everything up one level.
         if (this.model.syntheticRoot && !this.focusRoot) {
             const shift = nodeSize[1];
             laid.each(d => { if (vertical) d.y -= shift; else d.x -= shift; });
         }
-        return laid;
+
+        const placed: Placed[] = [];
+        const byNode = new Map<unknown, Placed>();
+        laid.each(d => {
+            const parent = d.parent ? byNode.get(d.parent) ?? null : null;
+            if (d.data.block) {
+                const c = cols.get(d.data) ?? 1, rows = Math.ceil(d.data.block.length / c);
+                d.data.block.forEach((m, i) => {
+                    const col = Math.floor(i / rows), row = i % rows;
+                    placed.push({
+                        data: m, depth: d.depth, parent, stacked: true,
+                        x: d.x + (col - (c - 1) / 2) * colStep,
+                        y: d.y + row * (ch + stackGap)
+                    });
+                });
+            } else if (cols.has(d.data)) {
+                // spacer: reserves room only
+            } else {
+                const p: Placed = { data: d.data, x: d.x, y: d.y, depth: d.depth, parent, stacked: false };
+                byNode.set(d, p);
+                placed.push(p);
+            }
+        });
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let top: Placed | null = null;
+        for (const n of placed) {
+            if (!n.data.person && !n.data.moreOf) continue;
+            if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+            if (n.data.person && (!top || n.depth < top.depth)) top = n;
+        }
+        if (!top) return { placed, bounds: null, topPos: null };
+        const pad = fs * 1.2; // room for the toggle chip
+        const spine = vertical && stacked ? stackGap * 1.4 : 0; // stacked-list spine sits just left of the cards
+        const x0 = minX - w / 2 - spine, x1 = maxX + w / 2 + (vertical ? 0 : pad);
+        const y0 = minY - ch / 2, y1 = maxY + ch / 2 + (vertical ? pad : 0);
+        return { placed, bounds: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, topPos: { x: top.x, y: top.y } };
     }
 
     private render(animate: boolean, anchorKey?: string): void {
-        const laid = this.layoutTree();
-        if (!laid) return;
+        if (!this.model) return;
+        if (this.layoutDirty) { this.layout = this.resolveLayout(); this.layoutDirty = false; }
+        const result = this.computeLayout(this.layout);
 
         const S = this.formattingSettings;
         const { w, h, fs } = this.dims();
-        const vertical = (S.layoutCard.orientation.value as any).value !== "horizontal";
+        const vertical = this.layout.vertical;
+        const stackGap = Math.round(10 * fs / 12);
         const radius = S.cardsCard.cornerRadius.value;
         const showPhoto = S.cardsCard.showPhoto.value;
         const showDept = S.cardsCard.showDepartment.value;
@@ -538,31 +663,19 @@ export class Visual implements IVisual {
             if (!prev.empty()) { const d = prev.datum(); anchorBefore = { x: (d as any)._x ?? d.x, y: (d as any)._y ?? d.y }; }
         }
 
-        const all = laid.descendants();
+        const all = result.placed;
         const nodes = all.filter(d => d.data.person);
         const moreNodes = all.filter(d => d.data.moreOf);
-        if (nodes.length) {
-            const pad = fs * 1.2; // room for the toggle chip
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            for (const n of all) {
-                if (!n.data.person && !n.data.moreOf) continue;
-                if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
-                if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
-            }
-            const x0 = minX - w / 2, x1 = maxX + w / 2 + (vertical ? 0 : pad);
-            const y0 = minY - h / 2, y1 = maxY + h / 2 + (vertical ? pad : 0);
-            this.bounds = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
-            let top = nodes[0];
-            for (const n of nodes) if (n.depth < top.depth) top = n;
-            this.topPos = { x: top.x, y: top.y };
-        } else {
-            this.bounds = null;
-            this.topPos = null;
-        }
-        const links = laid.links().filter(l => l.source.data.person);
+        this.bounds = nodes.length ? result.bounds : null;
+        this.topPos = nodes.length ? result.topPos : null;
+        const links = all.filter(d => d.parent && d.parent.data.person).map(d => ({ source: d.parent!, target: d }));
 
-        // ---- links (orthogonal elbows)
+        // ---- links: orthogonal elbows; stacked team lists hang off a spine beside the cards
         const linkPath = (s: PNode, t: PNode): string => {
+            if (t.stacked) {
+                const sy = s.y + h / 2, my = sy + S.layoutCard.levelSpacing.value / 2, spineX = t.x - w / 2 - stackGap * 1.4;
+                return `M${s.x},${sy}V${my}H${spineX}V${t.y}H${t.x - w / 2}`;
+            }
             if (vertical) {
                 const sy = s.y + h / 2, ty = t.y - h / 2, my = (sy + ty) / 2;
                 return `M${s.x},${sy}V${my}H${t.x}V${ty}`;
@@ -814,7 +927,7 @@ export class Visual implements IVisual {
         const pad = 20;
         const fitScale = Math.min(1.1, (vw - pad * 2) / box.width, (vh - pad * 2) / box.height);
         const scale = Math.max(fitScale, MIN_FIT_SCALE);
-        const vertical = (this.formattingSettings.layoutCard.orientation.value as any).value !== "horizontal";
+        const vertical = this.layout.vertical;
         let tx: number, ty: number;
         if (fitScale < MIN_FIT_SCALE && this.topPos) {
             // Too big to show legibly: keep a readable zoom and start at the top of the org.

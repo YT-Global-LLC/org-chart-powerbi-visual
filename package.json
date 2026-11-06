@@ -1,7 +1,7 @@
 {
   "name": "sp-org-chart",
   "description": "SharePoint Org Chart Power BI visual",
-  "version": "1.1.1.0",
+  "version": "1.2.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/YT-Global-LLC/org-chart-powerbi-visual.git"

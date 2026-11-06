@@ -120,6 +120,10 @@
                     "type": {
                         "enumeration": [
                             {
+                                "value": "auto",
+                                "displayName": "Auto (best fit)"
+                            },
+                            {
                                 "value": "vertical",
                                 "displayName": "Top to bottom"
                             },
@@ -148,6 +152,24 @@
                 "showSearch": {
                     "type": {
                         "bool": true
+                    }
+                },
+                "teamLayout": {
+                    "type": {
+                        "enumeration": [
+                            {
+                                "value": "auto",
+                                "displayName": "Auto (best fit)"
+                            },
+                            {
+                                "value": "stacked",
+                                "displayName": "Stacked list"
+                            },
+                            {
+                                "value": "sideBySide",
+                                "displayName": "Side by side"
+                            }
+                        ]
                     }
                 }
             }

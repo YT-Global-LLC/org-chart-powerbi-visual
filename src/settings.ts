@@ -8,8 +8,15 @@ import FormattingSettingsSlice = formattingSettings.Slice;
 import FormattingSettingsModel = formattingSettings.Model;
 
 const orientationItems = [
+    { value: "auto", displayName: "Auto (best fit)" },
     { value: "vertical", displayName: "Top to bottom" },
     { value: "horizontal", displayName: "Left to right" }
+];
+
+const teamLayoutItems = [
+    { value: "auto", displayName: "Auto (best fit)" },
+    { value: "stacked", displayName: "Stacked list" },
+    { value: "sideBySide", displayName: "Side by side" }
 ];
 
 class LayoutCard extends FormattingSettingsCard {
@@ -18,6 +25,13 @@ class LayoutCard extends FormattingSettingsCard {
         displayName: "Orientation",
         items: orientationItems,
         value: orientationItems[0]
+    });
+
+    teamLayout = new formattingSettings.ItemDropdown({
+        name: "teamLayout",
+        displayName: "Team members (no reports)",
+        items: teamLayoutItems,
+        value: teamLayoutItems[0]
     });
 
     initialDepth = new formattingSettings.NumUpDown({
@@ -58,7 +72,7 @@ class LayoutCard extends FormattingSettingsCard {
 
     name = "layout";
     displayName = "Layout";
-    slices: FormattingSettingsSlice[] = [this.orientation, this.initialDepth, this.levelSpacing, this.siblingSpacing, this.showSearch];
+    slices: FormattingSettingsSlice[] = [this.orientation, this.teamLayout, this.initialDepth, this.levelSpacing, this.siblingSpacing, this.showSearch];
 }
 
 class CardsCard extends FormattingSettingsCard {

@@ -26,6 +26,8 @@ export interface OrgNode {
     /** Only on "+N more" placeholder nodes: number of hidden siblings, and whose children they are. */
     more?: number;
     moreOf?: OrgNode;
+    /** Only on stacked-team placeholders: the team members drawn as one stacked list under their manager. */
+    block?: OrgNode[];
 }
 
 export interface BuildResult {
@@ -111,9 +113,11 @@ export function buildOrg(rows: PersonRow[]): BuildResult {
         else tops.push(node);
     }
 
+    // Natural order, so "Employee 2" comes before "Employee 10".
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     const byName = (a: OrgNode, b: OrgNode) =>
         (b.children.length > 0 ? 1 : 0) - (a.children.length > 0 ? 1 : 0) ||
-        (a.person?.name || "").localeCompare(b.person?.name || "");
+        collator.compare(a.person?.name || "", b.person?.name || "");
 
     let root: OrgNode;
     let syntheticRoot = false;
